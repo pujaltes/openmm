@@ -46,6 +46,49 @@
 using namespace OpenMM;
 using namespace std;
 
+void verifyNeighborList(const AlignedArray<float>& positions, const vector<set<int> >& exclusions, const Vec3* boxVectors, bool periodic, float cutoff, int blockSize) {
+    int numParticles = positions.size()/4;
+    ThreadPool threads;
+    CpuNeighborList neighborList(blockSize);
+    neighborList.computeNeighborList(numParticles, positions, exclusions, boxVectors, periodic, cutoff, threads);
+
+    // Convert the neighbor list to a set for faster lookup.
+
+    set<pair<int, int> > neighbors;
+    for (int i = 0; i < (int) neighborList.getSortedAtoms().size(); i++) {
+        int blockIndex = i/blockSize;
+        int indexInBlock = i-blockIndex*blockSize;
+        char mask = 1<<indexInBlock;
+        for (int j = 0; j < (int) neighborList.getBlockExclusions(blockIndex).size(); j++) {
+            if ((neighborList.getBlockExclusions(blockIndex)[j] & mask) == 0) {
+                int atom1 = neighborList.getSortedAtoms()[i];
+                int atom2 = neighborList.getBlockNeighbors(blockIndex)[j];
+                pair<int, int> entry = make_pair(min(atom1, atom2), max(atom1, atom2));
+                ASSERT(neighbors.find(entry) == neighbors.end() && neighbors.find(make_pair(entry.second, entry.first)) == neighbors.end()); // No duplicates
+                neighbors.insert(entry);
+            }
+        }
+    }
+
+    // Check each particle pair and figure out whether they should be in the neighbor list.
+
+    for (int i = 0; i < numParticles; i++)
+        for (int j = 0; j <= i; j++) {
+            bool shouldInclude = (exclusions[i].find(j) == exclusions[i].end());
+            Vec3 diff(positions[4*i]-positions[4*j], positions[4*i+1]-positions[4*j+1], positions[4*i+2]-positions[4*j+2]);
+            if (periodic) {
+                diff -= boxVectors[2]*floor(diff[2]/boxVectors[2][2]+0.5);
+                diff -= boxVectors[1]*floor(diff[1]/boxVectors[1][1]+0.5);
+                diff -= boxVectors[0]*floor(diff[0]/boxVectors[0][0]+0.5);
+            }
+            if (diff.dot(diff) > cutoff*cutoff)
+                shouldInclude = false;
+            bool isIncluded = (neighbors.find(make_pair(i, j)) != neighbors.end() || neighbors.find(make_pair(j, i)) != neighbors.end());
+            if (shouldInclude)
+                ASSERT(isIncluded);
+        }
+}
+
 void testNeighborList(bool periodic, bool triclinic) {
     const int numParticles = 500;
     const float cutoff = 2.0f;
@@ -76,45 +119,26 @@ void testNeighborList(bool periodic, bool triclinic) {
             exclusions[i-j].insert(i);
         }
     }
-    ThreadPool threads;
-    CpuNeighborList neighborList(blockSize);
-    neighborList.computeNeighborList(numParticles, positions, exclusions, boxVectors, periodic, cutoff, threads);
-    
-    // Convert the neighbor list to a set for faster lookup.
-    
-    set<pair<int, int> > neighbors;
-    for (int i = 0; i < (int) neighborList.getSortedAtoms().size(); i++) {
-        int blockIndex = i/blockSize;
-        int indexInBlock = i-blockIndex*blockSize;
-        char mask = 1<<indexInBlock;
-        for (int j = 0; j < (int) neighborList.getBlockExclusions(blockIndex).size(); j++) {
-            if ((neighborList.getBlockExclusions(blockIndex)[j] & mask) == 0) {
-                int atom1 = neighborList.getSortedAtoms()[i];
-                int atom2 = neighborList.getBlockNeighbors(blockIndex)[j];
-                pair<int, int> entry = make_pair(min(atom1, atom2), max(atom1, atom2));
-                ASSERT(neighbors.find(entry) == neighbors.end() && neighbors.find(make_pair(entry.second, entry.first)) == neighbors.end()); // No duplicates
-                neighbors.insert(entry);
-            }
-        }
-    }
-    
-    // Check each particle pair and figure out whether they should be in the neighbor list.
+    verifyNeighborList(positions, exclusions, boxVectors, periodic, cutoff, blockSize);
+    if (!periodic || !triclinic)
+        return;
 
-    for (int i = 0; i < numParticles; i++)
-        for (int j = 0; j <= i; j++) {
-            bool shouldInclude = (exclusions[i].find(j) == exclusions[i].end());
-            Vec3 diff(positions[4*i]-positions[4*j], positions[4*i+1]-positions[4*j+1], positions[4*i+2]-positions[4*j+2]);
-            if (periodic) {
-                diff -= boxVectors[2]*floor(diff[2]/boxSize[2]+0.5);
-                diff -= boxVectors[1]*floor(diff[1]/boxSize[1]+0.5);
-                diff -= boxVectors[0]*floor(diff[0]/boxSize[0]+0.5);
-            }
-            if (diff.dot(diff) > cutoff*cutoff)
-                shouldInclude = false;
-            bool isIncluded = (neighbors.find(make_pair(i, j)) != neighbors.end() || neighbors.find(make_pair(j, i)) != neighbors.end());
-            if (shouldInclude)
-                ASSERT(isIncluded);
-        }
+    // A block of particles that is wider than half the box may have neighbors in several periodic
+    // copies.  The last two particles are neighbors only in the copy displaced by the first box
+    // vector minus the second.
+
+    vector<Vec3> spread = {Vec3(5, 1, 8), Vec3(9, 4, 5), Vec3(2, 8, 3), Vec3(3, 4, 3), Vec3(4, 1, 6),
+                           Vec3(2, 4, 6), Vec3(3, 7, 4), Vec3(6, 3, 7), Vec3(8, 0.5, 7), Vec3(2, 8.5, 7)};
+    AlignedArray<float> spreadPositions(4*spread.size());
+    vector<set<int> > spreadExclusions(spread.size());
+    for (int i = 0; i < (int) spread.size(); i++) {
+        for (int j = 0; j < 3; j++)
+            spreadPositions[4*i+j] = (float) spread[i][j];
+        spreadPositions[4*i+3] = 0.0f;
+        spreadExclusions[i].insert(i);
+    }
+    for (int size : {4, 8})
+        verifyNeighborList(spreadPositions, spreadExclusions, boxVectors, periodic, cutoff, size);
 }
 
 int main() {
