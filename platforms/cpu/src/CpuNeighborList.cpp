@@ -35,6 +35,7 @@
 #include <set>
 #include <map>
 #include <unordered_map>
+#include <cfloat>
 #include <cmath>
 
 using namespace std;
@@ -178,18 +179,17 @@ public:
         float refineCutoff = maxDistance-max(max(blockWidth[0], blockWidth[1]), blockWidth[2]);
         float refineCutoffSquared = refineCutoff*refineCutoff;
 
-        // The calculation to find the nearest periodic copy is only guaranteed to work if the nearest copy is less
-        // than half a box width away.  If the block is wide enough that we might have missed it, skip the check
-        // based on the block center and always check individual atom pairs.
-
-        bool forceRefine = usePeriodic && triclinic && (periodicBoxSize[1]/2-blockWidth[1] < maxDistance ||
-                                                        periodicBoxSize[2]/2-blockWidth[2] < maxDistance);
-
         int dIndexY = int((maxDistance+blockWidth[1])/voxelSizeY)+1; // How may voxels away do we have to look?
         int dIndexZ = int((maxDistance+blockWidth[2])/voxelSizeZ)+1;
+
+        // If we have to look more than half way across the box, a voxel may be within range in more than one
+        // periodic copy, and the calculation to find the nearest copy is not guaranteed to pick the right one.
+        // In that case search every voxel and check individual atom pairs.
+
+        bool forceRefine = usePeriodic && triclinic && (2*dIndexY >= ny || 2*dIndexZ >= nz);
         if (usePeriodic) {
-            dIndexY = min(ny/2, dIndexY);
-            dIndexZ = min(nz/2, dIndexZ);
+            dIndexY = (forceRefine ? ny : min(ny/2, dIndexY));
+            dIndexZ = (forceRefine ? nz : min(nz/2, dIndexZ));
         }
         float centerPos[4];
         blockCenter.store(centerPos);
@@ -208,13 +208,11 @@ public:
         int lastSortedIndex = blockSize*(blockIndex+1);
         VoxelIndex voxelIndex(0, 0);
         for (int z = startz; z <= endz; ++z) {
-            voxelIndex.z = z;
-            if (usePeriodic)
-                voxelIndex.z = (z < 0 ? z+nz : (z >= nz ? z-nz : z));
+            float boxz = floor((float) z/nz);
+            voxelIndex.z = (usePeriodic ? z-(int) boxz*nz : z);
 
             // Loop over voxels along the y axis.
 
-            float boxz = floor((float) z/nz);
             int starty = centerVoxelIndex.y-dIndexY;
             int endy = centerVoxelIndex.y+dIndexY;
             float yoffset = (float) (usePeriodic ? boxz*periodicBoxVectors[2][1] : 0);
@@ -228,17 +226,19 @@ public:
                 endy = min(endy, ny-1);
             }
             for (int y = starty; y <= endy; ++y) {
-                voxelIndex.y = y;
-                if (usePeriodic)
-                    voxelIndex.y = (y < 0 ? y+ny : (y >= ny ? y-ny : y));
                 float boxy = floor((float) y/ny);
+                voxelIndex.y = (usePeriodic ? y-(int) boxy*ny : y);
                 
                 // Identify the range of atoms within this bin we need to search.  When using periodic boundary
                 // conditions, there may be two separate ranges.
                 
                 float minx = centerPos[0];
                 float maxx = centerPos[0];
-                if (usePeriodic && triclinic) {
+                if (forceRefine) {
+                    minx = -FLT_MAX;
+                    maxx = FLT_MAX;
+                }
+                else if (usePeriodic && triclinic) {
                     for (int k = 0; k < (int) blockAtoms.size(); k++) {
                         const float* atomPos = &sortedPositions[4*(blockSize*blockIndex+k)];
                         fvec4 delta1(0, voxelSizeY*voxelIndex.y-atomPos[1], voxelSizeZ*voxelIndex.z-atomPos[2], 0);

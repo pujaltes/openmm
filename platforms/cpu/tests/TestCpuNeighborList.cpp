@@ -89,6 +89,19 @@ void verifyNeighborList(const AlignedArray<float>& positions, const vector<set<i
         }
 }
 
+void verifyPositions(const vector<Vec3>& particles, const Vec3* boxVectors, float cutoff) {
+    AlignedArray<float> positions(4*particles.size());
+    vector<set<int> > exclusions(particles.size());
+    for (int i = 0; i < (int) particles.size(); i++) {
+        for (int j = 0; j < 3; j++)
+            positions[4*i+j] = (float) particles[i][j];
+        positions[4*i+3] = 0.0f;
+        exclusions[i].insert(i);
+    }
+    for (int blockSize : {4, 8})
+        verifyNeighborList(positions, exclusions, boxVectors, true, cutoff, blockSize);
+}
+
 void testNeighborList(bool periodic, bool triclinic) {
     const int numParticles = 500;
     const float cutoff = 2.0f;
@@ -127,18 +140,17 @@ void testNeighborList(bool periodic, bool triclinic) {
     // copies.  The last two particles are neighbors only in the copy displaced by the first box
     // vector minus the second.
 
-    vector<Vec3> spread = {Vec3(5, 1, 8), Vec3(9, 4, 5), Vec3(2, 8, 3), Vec3(3, 4, 3), Vec3(4, 1, 6),
-                           Vec3(2, 4, 6), Vec3(3, 7, 4), Vec3(6, 3, 7), Vec3(8, 0.5, 7), Vec3(2, 8.5, 7)};
-    AlignedArray<float> spreadPositions(4*spread.size());
-    vector<set<int> > spreadExclusions(spread.size());
-    for (int i = 0; i < (int) spread.size(); i++) {
-        for (int j = 0; j < 3; j++)
-            spreadPositions[4*i+j] = (float) spread[i][j];
-        spreadPositions[4*i+3] = 0.0f;
-        spreadExclusions[i].insert(i);
-    }
-    for (int size : {4, 8})
-        verifyNeighborList(spreadPositions, spreadExclusions, boxVectors, periodic, cutoff, size);
+    verifyPositions({Vec3(5, 1, 8), Vec3(9, 4, 5), Vec3(2, 8, 3), Vec3(3, 4, 3), Vec3(4, 1, 6),
+                     Vec3(2, 4, 6), Vec3(3, 7, 4), Vec3(6, 3, 7), Vec3(8, 0.5, 7), Vec3(2, 8.5, 7)},
+                    boxVectors, cutoff);
+
+    // The block may also need to search more than one periodic copy of the same voxel.  Particles 4
+    // and 9 are 11.2 nm apart in the central copy, but neighbors in the one displaced by the second
+    // plus the third box vector.
+
+    verifyPositions({Vec3(1.5, 4.5, 3), Vec3(0.5, 2, 1.5), Vec3(1, 7.5, 0), Vec3(0, 2.5, 8.5), Vec3(9, 8, 10.5),
+                     Vec3(8.5, 7, 0.5), Vec3(7.5, 7, 2.5), Vec3(3, 4.5, 5.5), Vec3(4.5, 0, 3), Vec3(8.5, 3, 0.5)},
+                    boxVectors, cutoff);
 }
 
 int main() {
