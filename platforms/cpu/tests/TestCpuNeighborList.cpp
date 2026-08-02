@@ -46,20 +46,8 @@
 using namespace OpenMM;
 using namespace std;
 
-void testNeighborList(bool periodic, bool triclinic) {
+void testNeighborList(bool periodic, const Vec3* boxVectors, float cutoff) {
     const int numParticles = 500;
-    const float cutoff = 2.0f;
-    Vec3 boxVectors[3];
-    if (triclinic) {
-        boxVectors[0] = Vec3(10, 0, 0);
-        boxVectors[1] = Vec3(4, 9, 0);
-        boxVectors[2] = Vec3(-3, -3.5, 11);
-    }
-    else {
-        boxVectors[0] = Vec3(10, 0, 0);
-        boxVectors[1] = Vec3(0, 9, 0);
-        boxVectors[2] = Vec3(0, 0, 11);
-    }
     const float boxSize[3] = {(float) boxVectors[0][0], (float) boxVectors[1][1], (float) boxVectors[2][2]};
     const int blockSize = 8;
     OpenMM_SFMT::SFMT sfmt;
@@ -123,9 +111,17 @@ int main() {
             cout << "CPU is not supported.  Exiting." << endl;
             return 0;
         }
-        testNeighborList(false, false);
-        testNeighborList(true, false);
-        testNeighborList(true, true);
+        Vec3 rectangular[3] = {Vec3(10, 0, 0), Vec3(0, 9, 0), Vec3(0, 0, 11)};
+        Vec3 triclinic[3] = {Vec3(10, 0, 0), Vec3(4, 9, 0), Vec3(-3, -3.5, 11)};
+        Vec3 dodecahedron[3] = {Vec3(5, 0, 0), Vec3(0, 5, 0), Vec3(2.5, 2.5, 2.5*sqrt(2.0))};
+        testNeighborList(false, rectangular, 2.0f);
+        testNeighborList(true, rectangular, 2.0f);
+        testNeighborList(true, triclinic, 2.0f);
+
+        // With the cutoff this close to half the box width, a block of atoms can be wider than half
+        // the box, so the nearest periodic copy of a neighbor is not the same for every atom in it.
+
+        testNeighborList(true, dodecahedron, 1.7f);
     }
     catch(const exception& e) {
         cout << "exception: " << e.what() << endl;
