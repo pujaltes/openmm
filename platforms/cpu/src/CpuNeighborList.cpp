@@ -164,7 +164,7 @@ public:
         return VoxelIndex(y, z);
     }
         
-    void getNeighbors(vector<int>& neighbors, int blockIndex, const fvec4& blockCenter, const fvec4& blockWidth, const vector<int>& sortedAtoms, vector<CpuNeighborList::BlockExclusionMask>& exclusions, float maxDistance, const vector<int>& blockAtoms, const vector<float>& blockAtomX, const vector<float>& blockAtomY, const vector<float>& blockAtomZ, const vector<float>& sortedPositions, const vector<VoxelIndex>& atomVoxelIndex) const {
+    void getNeighbors(vector<int>& neighbors, int blockIndex, const fvec4& blockCenter, const fvec4& blockWidth, const vector<int>& sortedAtoms, vector<CpuNeighborList::BlockExclusionMask>& exclusions, float maxDistance, const vector<int>& blockAtoms, const vector<float>& blockAtomX, const vector<float>& blockAtomY, const vector<float>& blockAtomZ, const vector<float>& sortedPositions, vector<int>& atomAdded) const {
         neighbors.resize(0);
         exclusions.resize(0);
         fvec4 boxSize(periodicBoxSize[0], periodicBoxSize[1], periodicBoxSize[2], 0);
@@ -184,9 +184,11 @@ public:
         bool forceRefine = usePeriodic && triclinic && (periodicBoxSize[1]/2-blockWidth[1] < maxDistance ||
                                                         periodicBoxSize[2]/2-blockWidth[2] < maxDistance);
 
+        // In a triclinic box a voxel may be in range in more than one periodic copy, so search each of them.
+
         int dIndexY = int((maxDistance+blockWidth[1])/voxelSizeY)+1; // How may voxels away do we have to look?
         int dIndexZ = int((maxDistance+blockWidth[2])/voxelSizeZ)+1;
-        if (usePeriodic) {
+        if (usePeriodic && !triclinic) {
             dIndexY = min(ny/2, dIndexY);
             dIndexZ = min(nz/2, dIndexZ);
         }
@@ -198,104 +200,61 @@ public:
 
         int startz = centerVoxelIndex.z-dIndexZ;
         int endz = centerVoxelIndex.z+dIndexZ;
-        if (usePeriodic)
-            endz = min(endz, startz+nz-1);
-        else {
+        if (!usePeriodic) {
             startz = max(startz, 0);
             endz = min(endz, nz-1);
         }
+        else if (!triclinic)
+            endz = min(endz, startz+nz-1);
         int lastSortedIndex = blockSize*(blockIndex+1);
         VoxelIndex voxelIndex(0, 0);
         for (int z = startz; z <= endz; ++z) {
-            voxelIndex.z = z;
-            if (usePeriodic)
-                voxelIndex.z = (z < 0 ? z+nz : (z >= nz ? z-nz : z));
+            float boxz = floor((float) z/nz);
+            voxelIndex.z = (usePeriodic ? z-(int) boxz*nz : z);
 
             // Loop over voxels along the y axis.
 
-            float boxz = floor((float) z/nz);
             int starty = centerVoxelIndex.y-dIndexY;
             int endy = centerVoxelIndex.y+dIndexY;
             float yoffset = (float) (usePeriodic ? boxz*periodicBoxVectors[2][1] : 0);
             if (usePeriodic) {
                 starty -= (int) ceil(yoffset/voxelSizeY);
                 endy -= (int) floor(yoffset/voxelSizeY);
-                endy = min(endy, starty+ny-1);
+                if (!triclinic)
+                    endy = min(endy, starty+ny-1);
             }
             else {
                 starty = max(starty, 0);
                 endy = min(endy, ny-1);
             }
             for (int y = starty; y <= endy; ++y) {
-                voxelIndex.y = y;
-                if (usePeriodic)
-                    voxelIndex.y = (y < 0 ? y+ny : (y >= ny ? y-ny : y));
                 float boxy = floor((float) y/ny);
+                voxelIndex.y = (usePeriodic ? y-(int) boxy*ny : y);
                 
                 // Identify the range of atoms within this bin we need to search.  When using periodic boundary
                 // conditions, there may be two separate ranges.
                 
                 float minx = centerPos[0];
                 float maxx = centerPos[0];
-                if (usePeriodic && triclinic) {
-                    for (int k = 0; k < (int) blockAtoms.size(); k++) {
-                        const float* atomPos = &sortedPositions[4*(blockSize*blockIndex+k)];
-                        fvec4 delta1(0, voxelSizeY*voxelIndex.y-atomPos[1], voxelSizeZ*voxelIndex.z-atomPos[2], 0);
-                        fvec4 delta2 = delta1+fvec4(0, voxelSizeY, 0, 0);
-                        fvec4 delta3 = delta1+fvec4(0, 0, voxelSizeZ, 0);
-                        fvec4 delta4 = delta1+fvec4(0, voxelSizeY, voxelSizeZ, 0);
-                        delta1 -= periodicBoxVec4[2]*floorf(delta1[2]*recipBoxSize[2]+0.5f);
-                        delta1 -= periodicBoxVec4[1]*floorf(delta1[1]*recipBoxSize[1]+0.5f);
-                        delta1 -= periodicBoxVec4[0]*floorf(delta1[0]*recipBoxSize[0]+0.5f);
-                        delta2 -= periodicBoxVec4[2]*floorf(delta2[2]*recipBoxSize[2]+0.5f);
-                        delta2 -= periodicBoxVec4[1]*floorf(delta2[1]*recipBoxSize[1]+0.5f);
-                        delta2 -= periodicBoxVec4[0]*floorf(delta2[0]*recipBoxSize[0]+0.5f);
-                        delta3 -= periodicBoxVec4[2]*floorf(delta3[2]*recipBoxSize[2]+0.5f);
-                        delta3 -= periodicBoxVec4[1]*floorf(delta3[1]*recipBoxSize[1]+0.5f);
-                        delta3 -= periodicBoxVec4[0]*floorf(delta3[0]*recipBoxSize[0]+0.5f);
-                        delta4 -= periodicBoxVec4[2]*floorf(delta4[2]*recipBoxSize[2]+0.5f);
-                        delta4 -= periodicBoxVec4[1]*floorf(delta4[1]*recipBoxSize[1]+0.5f);
-                        delta4 -= periodicBoxVec4[0]*floorf(delta4[0]*recipBoxSize[0]+0.5f);
-                        if (delta1[1] < 0 && delta1[1]+voxelSizeY > 0)
-                            delta1 = fvec4(delta1[0], 0, delta1[2], 0);
-                        if (delta1[2] < 0 && delta1[2]+voxelSizeZ > 0)
-                            delta1 = fvec4(delta1[0], delta1[1], 0, 0);
-                        if (delta3[1] < 0 && delta3[1]+voxelSizeY > 0)
-                            delta3 = fvec4(delta3[0], 0, delta3[2], 0);
-                        if (delta2[2] < 0 && delta2[2]+voxelSizeZ > 0)
-                            delta2 = fvec4(delta2[0], delta2[1], 0, 0);
-                        fvec4 delta = min(min(min(abs(delta1), abs(delta2)), abs(delta3)), abs(delta4));
-                        float dy = (voxelIndex.y == atomVoxelIndex[k].y ? 0.0f : delta[1]);
-                        float dz = (voxelIndex.z == atomVoxelIndex[k].z ? 0.0f : delta[2]);
-                        float dist2 = maxDistanceSquared-dy*dy-dz*dz;
-                        if (dist2 > 0) {
-                            float dist = sqrtf(dist2);
-                            minx = min(minx, atomPos[0]-dist-max(max(max(delta1[0], delta2[0]), delta3[0]), delta4[0]));
-                            maxx = max(maxx, atomPos[0]+dist-min(min(min(delta1[0], delta2[0]), delta3[0]), delta4[0]));
-                        }
+                float xoffset = (float) (usePeriodic ? boxy*periodicBoxVectors[1][0]+boxz*periodicBoxVectors[2][0] : 0);
+                fvec4 offset(-xoffset, yoffset+voxelSizeY*y+(usePeriodic ? 0.0f : miny), voxelSizeZ*z+(usePeriodic ? 0.0f : minz), 0);
+                for (int k = 0; k < (int) blockAtoms.size(); k++) {
+                    const float* atomPos = &sortedPositions[4*(blockSize*blockIndex+k)];
+                    fvec4 posVec(atomPos);
+                    fvec4 delta1 = offset-posVec;
+                    fvec4 delta2 = delta1+fvec4(0, voxelSizeY, voxelSizeZ, 0);
+                    if (usePeriodic && !triclinic) {
+                        delta1 -= round(delta1*invBoxSize)*boxSize;
+                        delta2 -= round(delta2*invBoxSize)*boxSize;
                     }
-                }
-                else {
-                    float xoffset = (float) (usePeriodic ? boxy*periodicBoxVectors[1][0]+boxz*periodicBoxVectors[2][0] : 0);
-                    fvec4 offset(-xoffset, -yoffset+voxelSizeY*y+(usePeriodic ? 0.0f : miny), voxelSizeZ*z+(usePeriodic ? 0.0f : minz), 0);
-                    for (int k = 0; k < (int) blockAtoms.size(); k++) {
-                        const float* atomPos = &sortedPositions[4*(blockSize*blockIndex+k)];
-                        fvec4 posVec(atomPos);
-                        fvec4 delta1 = offset-posVec;
-                        fvec4 delta2 = delta1+fvec4(0, voxelSizeY, voxelSizeZ, 0);
-                        if (usePeriodic) {
-                            delta1 -= round(delta1*invBoxSize)*boxSize;
-                            delta2 -= round(delta2*invBoxSize)*boxSize;
-                        }
-                        fvec4 delta = min(abs(delta1), abs(delta2));
-                        float dy = (y == atomVoxelIndex[k].y ? 0.0f : delta[1]);
-                        float dz = (z == atomVoxelIndex[k].z ? 0.0f : delta[2]);
-                        float dist2 = maxDistanceSquared-dy*dy-dz*dz;
-                        if (dist2 > 0) {
-                            float dist = sqrtf(dist2);
-                            minx = min(minx, atomPos[0]-dist-xoffset);
-                            maxx = max(maxx, atomPos[0]+dist-xoffset);
-                        }
+                    fvec4 delta = min(abs(delta1), abs(delta2));
+                    float dy = (delta1[1] < 0 && delta2[1] > 0 ? 0.0f : delta[1]);
+                    float dz = (delta1[2] < 0 && delta2[2] > 0 ? 0.0f : delta[2]);
+                    float dist2 = maxDistanceSquared-dy*dy-dz*dz;
+                    if (dist2 > 0) {
+                        float dist = sqrtf(dist2);
+                        minx = min(minx, atomPos[0]-dist-xoffset);
+                        maxx = max(maxx, atomPos[0]+dist-xoffset);
                     }
                 }
                 if (minx == maxx)
@@ -336,7 +295,7 @@ public:
                         const int sortedIndex = voxelBins[item].second;
 
                         // Avoid duplicate entries.
-                        if (sortedIndex >= lastSortedIndex)
+                        if (sortedIndex >= lastSortedIndex || atomAdded[sortedIndex] == blockIndex)
                             continue;
                         
                         fvec4 atomPos(&sortedPositions[4*sortedIndex]);
@@ -390,6 +349,7 @@ public:
                         
                         // Add this atom to the list of neighbors.
                         
+                        atomAdded[sortedIndex] = blockIndex;
                         neighbors.push_back(sortedAtoms[sortedIndex]);
                         if (sortedIndex < blockSize*blockIndex)
                             exclusions.push_back(0);
@@ -618,7 +578,7 @@ void CpuNeighborList::threadComputeNeighborList(ThreadPool& threads, int threadI
     int numBlocks = blockNeighbors.size();
     vector<int> blockAtoms;
     vector<float> blockAtomX(blockSize), blockAtomY(blockSize), blockAtomZ(blockSize);
-    vector<VoxelIndex> atomVoxelIndex;
+    vector<int> atomAdded(numAtoms, -1);
     while (true) {
         int i = atomicCounter++;
         if (i >= numBlocks)
@@ -629,12 +589,8 @@ void CpuNeighborList::threadComputeNeighborList(ThreadPool& threads, int threadI
         int firstIndex = blockSize*i;
         int atomsInBlock = min(blockSize, numAtoms-firstIndex);
         blockAtoms.resize(atomsInBlock);
-        atomVoxelIndex.resize(atomsInBlock);
-        for (int j = 0; j < atomsInBlock; j++) {
+        for (int j = 0; j < atomsInBlock; j++)
             blockAtoms[j] = sortedAtoms[firstIndex+j];
-            int posIndex = USE_INDICES ? indices[blockAtoms[j]] : blockAtoms[j];
-            atomVoxelIndex[j] = voxels->getVoxelIndex(&atomLocations[4*posIndex]);
-        }
         fvec4 minPos(&sortedPositions[4*firstIndex]);
         fvec4 maxPos = minPos;
         for (int j = 1; j < atomsInBlock; j++) {
@@ -652,7 +608,7 @@ void CpuNeighborList::threadComputeNeighborList(ThreadPool& threads, int threadI
             blockAtomY[j] = 1e10;
             blockAtomZ[j] = 1e10;
         }
-        voxels->getNeighbors(blockNeighbors[i], i, (maxPos+minPos)*0.5f, (maxPos-minPos)*0.5f, sortedAtoms, blockExclusions[i], maxDistance, blockAtoms, blockAtomX, blockAtomY, blockAtomZ, sortedPositions, atomVoxelIndex);
+        voxels->getNeighbors(blockNeighbors[i], i, (maxPos+minPos)*0.5f, (maxPos-minPos)*0.5f, sortedAtoms, blockExclusions[i], maxDistance, blockAtoms, blockAtomX, blockAtomY, blockAtomZ, sortedPositions, atomAdded);
 
         // Record the exclusions for this block.
 

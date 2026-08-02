@@ -114,6 +114,7 @@ int main() {
         Vec3 rectangular[3] = {Vec3(10, 0, 0), Vec3(0, 9, 0), Vec3(0, 0, 11)};
         Vec3 triclinic[3] = {Vec3(10, 0, 0), Vec3(4, 9, 0), Vec3(-3, -3.5, 11)};
         Vec3 dodecahedron[3] = {Vec3(5, 0, 0), Vec3(0, 5, 0), Vec3(2.5, 2.5, 2.5*sqrt(2.0))};
+        Vec3 skewed[3] = {Vec3(4, 0, 0), Vec3(1.5, 6, 0), Vec3(0.6, 2.8, 3.2)};
         testNeighborList(false, rectangular, 2.0f);
         testNeighborList(true, rectangular, 2.0f);
         testNeighborList(true, triclinic, 2.0f);
@@ -122,6 +123,10 @@ int main() {
         // the box, so the nearest periodic copy of a neighbor is not the same for every atom in it.
 
         testNeighborList(true, dodecahedron, 1.7f);
+
+        // In a box this strongly tilted, a voxel can be within the cutoff in more than one periodic copy.
+
+        testNeighborList(true, skewed, 1.5f);
     }
     catch(const exception& e) {
         cout << "exception: " << e.what() << endl;
