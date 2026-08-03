@@ -178,6 +178,12 @@ public:
         float refineCutoff = maxDistance-max(max(blockWidth[0], blockWidth[1]), blockWidth[2]);
         float refineCutoffSquared = refineCutoff*refineCutoff;
 
+        // The calculation to find the nearest periodic copy is only guaranteed to work if the nearest copy is
+        // less than half a box width away.  If there's any possibility we might have missed it, do a detailed check.
+
+        bool forceRefine = usePeriodic && triclinic && (periodicBoxSize[1]/2-blockWidth[1] < maxDistance ||
+                                                        periodicBoxSize[2]/2-blockWidth[2] < maxDistance);
+
         int dIndexY = int((maxDistance+blockWidth[1])/voxelSizeY)+1; // How may voxels away do we have to look?
         int dIndexZ = int((maxDistance+blockWidth[2])/voxelSizeZ)+1;
         if (usePeriodic) {
@@ -344,10 +350,10 @@ public:
                         }
                         delta = max(0.0f, abs(delta)-blockWidth);
                         float dSquared = dot3(delta, delta);
-                        if (dSquared > maxDistanceSquared)
+                        if (dSquared > maxDistanceSquared && !forceRefine)
                             continue;
                         
-                        if (dSquared > refineCutoffSquared) {
+                        if (dSquared > refineCutoffSquared || forceRefine) {
                             // The distance is large enough that there might not be any actual interactions.
                             // Check individual atom pairs to be sure.
                             
